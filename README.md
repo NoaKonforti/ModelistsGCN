@@ -36,3 +36,11 @@ pip install ModelistsGCN
 ## Tutorial 
 A step-by-step tutorial is available here: [tutorial/tutorial.ipynb](tutorial/tutorial.ipynb)
 
+---
+
+## Data availability
+
+The dataset used in the tutorial is publicly available on Zenodo:  
+https://doi.org/10.5281/zenodo.18651041
+
+The tutorial notebook automatically downloads and extracts the data.
