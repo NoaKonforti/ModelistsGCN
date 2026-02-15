@@ -15,3 +15,15 @@ dist/
 # OS files
 .DS_Store
 .~lock.*
+
+# tutorial data
+# Tutorial data
+tutorial/tutorial_data/
+
+# Any data folders
+data/
+*/data/
+
+# Large files
+*.npy
+*.zip
