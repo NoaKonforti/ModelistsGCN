@@ -34,5 +34,5 @@ pip install ModelistsGCN
 ---
 
 ## Tutorial 
-A step-by-step tutorial is available here
+A step-by-step tutorial is available here: [tutorial/tutorial.ipynb](tutorial/tutorial.ipynb)
 
