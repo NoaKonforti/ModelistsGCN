@@ -21,6 +21,9 @@ def train(
     pull_weight: float = 0.6,
     num_epochs: int = 20,
     seed: int = 5507,
+    alpha=0.8, 
+    max_iter=5,
+    prop_beta = 0.03,
 ) -> Tuple[nn.Module, torch.Tensor]:
     """
     Trains ModelistsGCN end-to-end by iteratively computing embeddings, 
@@ -47,9 +50,9 @@ def train(
         model.initialize_GMM_from_modelists(z, modelists, num_clusters, num_modelists_clusters)       
 
         gmm_posteriors = model.compute_gmm_posteriors(z)
-        soft_modelists,_ = model.label_propagation_weights(G, modelists, num_clusters)
+        soft_modelists,_ = model.label_propagation_weights(G, modelists, num_clusters, alpha=alpha, max_iter=max_iter)
         confidence = soft_modelists.max(dim=1).values
-        soft_mask = (modelists != -1) & (confidence > (1 / num_clusters + 0.03))
+        soft_mask = (modelists != -1) & (confidence > (1 / num_clusters + prop_beta))
         prop_loss = model.loss_propagation(gmm_posteriors, soft_modelists, soft_mask)
     
         contrast_loss = model.loss_feature_modelist_contrastive(

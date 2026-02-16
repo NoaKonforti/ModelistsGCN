@@ -32,6 +32,7 @@ def run(cfg: Dict[str, Any]):
     training_cfg = cfg.get("training", {})
     model_cfg = cfg.get("model", {})
     seed = training_cfg.get("seed", 5507)
+    label_prop_cfg = cfg.get("label_prop_param", {})
     set_seed(seed) 
     # === preprocessing ===
     G, modelists = preprocessing(cfg)
@@ -60,6 +61,9 @@ def run(cfg: Dict[str, Any]):
         pull_weight=training_cfg.get("beta", 0.6),
         num_epochs=training_cfg.get("epochs", 20),
         seed=training_cfg.get("seed", 5507),
+        alpha=label_prop_cfg.get("prop_alpha", 0.8), 
+        max_iter=label_prop_cfg.get("max_iter", 5),
+        prop_beta = label_prop_cfg.get("prop_beta", 0.03),
     )
     
     print("\n=== Clustering ===")
