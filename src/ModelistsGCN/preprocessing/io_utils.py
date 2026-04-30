@@ -30,16 +30,34 @@ def load_morpho_df(path: str) -> pd.DataFrame:
 
 def load_centroids_df(path: str) -> pd.DataFrame:
     centroids = pd.read_csv(path)
-    required = {"cellID", "centroid_z", "centroid_y", "centroid_x"}
-    missing = required - set(centroids.columns)
-    if missing:
-        raise ValueError(f"centroids_csv missing columns: {sorted(missing)}. Got: {list(centroids.columns)}")
 
+    cols = set(centroids.columns)
+
+    has_3d = {"cellID", "centroid_z", "centroid_y", "centroid_x"}.issubset(cols)
+    has_2d = {"cellID", "centroid_y", "centroid_x"}.issubset(cols)
+
+    if not (has_3d or has_2d):
+        raise ValueError(
+            "centroids_csv must contain either:\n"
+            "['cellID', 'centroid_z', 'centroid_y', 'centroid_x'] (3D)\n"
+            "or\n"
+            "['cellID', 'centroid_y', 'centroid_x'] (2D)\n"
+            f"Got: {list(centroids.columns)}"
+        )
     centroids["cellID"] = centroids["cellID"].astype(str)
     centroids = centroids.set_index("cellID")
     centroids.index.name = "cellID"
 
-    for c in ["centroid_z", "centroid_y", "centroid_x"]:
+
+    # determine which columns to keep
+    if has_3d:
+        coord_cols = ["centroid_z", "centroid_y", "centroid_x"]
+    else:
+        coord_cols = ["centroid_y", "centroid_x"]
+
+    # convert to numeric safely
+    for c in coord_cols:
         centroids[c] = pd.to_numeric(centroids[c], errors="coerce")
 
+    centroids = centroids[coord_cols]
     return centroids

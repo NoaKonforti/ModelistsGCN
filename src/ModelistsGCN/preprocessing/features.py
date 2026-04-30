@@ -5,12 +5,46 @@ from skimage.measure import regionprops
 import numpy as np
 import pandas as pd
 from scipy.spatial import distance
-
+from skimage.measure import perimeter
+from skimage.morphology import convex_hull_image
+from scipy import ndimage as ndi
 
 # ===================================
 # Compute morphological features
 # ===================================
-def compute_morpho_fetures(
+
+def compute_morpho_features(
+    matrix: np.ndarray,
+    labels: Optional[Iterable[int]] = None,
+    voxel_size: Tuple[float, float, float] = (1.0, 1.0, 1.0),
+) -> Dict[int, Dict[str, Any]]:
+    """
+    Compute per-cell morphological features from a labeled segmentation.
+
+    Supports:
+    - 3D segmentations with shape (z, y, x)
+    - 2D segmentations with shape (y, x)
+    - 2D segmentations stored as shape (1, y, x)
+
+    Notes:
+    - Label 0 is treated as background
+    - For 3D, the original logic is preserved
+    - For 2D, 3D-only features are replaced with 2D-appropriate shape descriptors
+    """
+
+    if matrix.ndim not in (2, 3):
+        raise ValueError(f"Expected 2D or 3D matrix, got shape={matrix.shape}")
+
+    is_2d = (matrix.ndim == 2) or (matrix.ndim == 3 and matrix.shape[0] == 1)
+
+    if is_2d:
+        return _compute_morpho_features_2d(matrix, labels, voxel_size)
+    else:
+        return _compute_morpho_features_3d(matrix, labels, voxel_size)
+
+
+
+def _compute_morpho_features_3d(
     matrix: np.ndarray,
     labels: Optional[Iterable[int]] = None,
     voxel_size: Tuple[float, float, float] = (1.0, 1.0, 1.0),
@@ -164,6 +198,131 @@ def compute_morpho_fetures(
         
     return results
 
+def _compute_morpho_features_2d(
+    matrix: np.ndarray,
+    labels: Optional[Iterable[int]] = None,
+    voxel_size: Tuple[float, float, float] = (1.0, 1.0, 1.0),
+) -> Dict[int, Dict[str, Any]]:
+    """
+    2D implementation with voxel-size-aware shape features.
+
+    For 2D:
+    - area is scaled by vy * vx
+    - perimeter is scaled using spacing=(vy, vx)
+    - centroid is returned in physical coordinates: (centroid_y, centroid_x)
+    """
+    if matrix.ndim == 3:
+        if matrix.shape[0] != 1:
+            raise ValueError(f"Expected 2D or single-slice matrix, got shape={matrix.shape}")
+        matrix = matrix[0]
+
+    if matrix.ndim != 2:
+        raise ValueError(f"Expected 2D matrix, got shape={matrix.shape}")
+
+    #_, vy, vx = map(float, voxel_size)
+    if len(voxel_size) == 2:
+        vy, vx = map(float, voxel_size)
+    elif len(voxel_size) == 3:
+        _, vy, vx = map(float, voxel_size)
+    else:
+        raise ValueError(f"voxel_size must have length 2 or 3, got {voxel_size}")
+
+    pixel_area = vy * vx
+
+    matrix = np.asarray(matrix)
+    max_label = int(matrix.max())
+    if max_label <= 0:
+        return {}
+
+    if labels is None:
+        labels_arr = np.unique(matrix)
+        labels_arr = labels_arr[labels_arr > 0].astype(np.int32)
+    else:
+        labels_arr = np.asarray([int(x) for x in labels], dtype=np.int32)
+        labels_arr = labels_arr[labels_arr > 0]
+
+    if labels_arr.size == 0:
+        return {}
+
+    y_idx, x_idx = np.nonzero(matrix)
+    lab = matrix[y_idx, x_idx].astype(np.int32)
+
+    size = max_label + 1
+    counts = np.bincount(lab, minlength=size).astype(np.float64)
+
+    sum_y = np.bincount(lab, weights=y_idx.astype(np.float64), minlength=size)
+    sum_x = np.bincount(lab, weights=x_idx.astype(np.float64), minlength=size)
+
+    with np.errstate(divide="ignore", invalid="ignore"):
+        cy = sum_y / counts
+        cx = sum_x / counts
+
+    obj_slices = ndi.find_objects(matrix)
+    results: Dict[int, Dict[str, Any]] = {}
+
+    for L in labels_arr.tolist():
+        if L <= 0 or L >= size or counts[L] <= 0:
+            continue
+
+        slc = obj_slices[L - 1]
+        if slc is None:
+            continue
+
+        sub = matrix[slc]
+        mask = sub == L
+        if not np.any(mask):
+            continue
+
+        area_val = float(counts[L] * pixel_area)
+        centroid = (
+            float(cy[L] * vy),
+            float(cx[L] * vx),
+        )
+        def _physical_perimeter_2d(mask: np.ndarray, vy: float, vx: float) -> float:
+            padded = np.pad(mask.astype(bool), 1, mode="constant", constant_values=False)
+        
+            # boundaries between rows -> horizontal edge length = vx
+            y_edges = np.diff(padded, axis=0) != 0
+        
+            # boundaries between columns -> vertical edge length = vy
+            x_edges = np.diff(padded, axis=1) != 0
+        
+            return float(y_edges.sum() * vx + x_edges.sum() * vy)
+        
+        #perim = float(perimeter(mask, spacing=(vy, vx)))
+        perim = _physical_perimeter_2d(mask, vy, vx)
+
+        convex_mask = convex_hull_image(mask)
+        #convex_perim = float(perimeter(convex_mask, spacing=(vy, vx)))
+        convex_perim = _physical_perimeter_2d(convex_mask, vy, vx)
+
+        circularity = 0.0
+        if perim > 0.0:
+            circularity = float(4.0 * np.pi * area_val / (perim ** 2))
+
+        roughness = 0.0
+        if convex_perim > 0.0:
+            roughness = float(perim / convex_perim)
+
+        props = regionprops(mask.astype(np.uint8), spacing=(vy, vx))
+        if props:
+            major = float(getattr(props[0], "major_axis_length", 0.0) or 0.0)
+            minor = float(getattr(props[0], "minor_axis_length", 0.0) or 0.0)
+            elong = 0.0 if major == 0.0 else float(1.0 - minor / major)
+        else:
+            elong = 0.0
+
+        results[int(L)] = {
+            "area": area_val,
+            "perimeter": perim,
+            "centroid": centroid,
+            "circularity": circularity,
+            "roughness": roughness,
+            "elongation_ratio": elong,
+        }
+
+    return results
+
 # ===================================
 # Split morpho fetures and centroid coords
 # ===================================
@@ -184,19 +343,36 @@ def split_morpho_centroids(
 
     # expand centroid tuple -> centroid_z/y/x (same logic you already had) :contentReference[oaicite:2]{index=2}
     if "centroid" in df.columns:
+        centroid_lengths = df["centroid"].dropna().apply(len).unique()
+
+        if len(centroid_lengths) != 1:
+            raise ValueError(
+                f"Inconsistent centroid dimensions found: {centroid_lengths}"
+            )
+
+        centroid_dim = centroid_lengths[0]
+
+        if centroid_dim == 3:
+            centroid_cols = ["centroid_z", "centroid_y", "centroid_x"]
+        elif centroid_dim == 2:
+            centroid_cols = ["centroid_y", "centroid_x"]
+        else:
+            raise ValueError(
+                f"Centroid must have length 2 or 3, got length {centroid_dim}"
+            )
+
         centroid_df = pd.DataFrame(
             df["centroid"].tolist(),
             index=df.index,
-            columns=["centroid_z", "centroid_y", "centroid_x"],
+            columns=centroid_cols,
         )
+
         df = df.drop(columns=["centroid"]).join(centroid_df)
-
+        
     # ensure numeric
-    for c in ["centroid_z", "centroid_y", "centroid_x"]:
-        if c in df.columns:
-            df[c] = pd.to_numeric(df[c], errors="coerce")
+    for c in centroid_cols:
+        df[c] = pd.to_numeric(df[c], errors="coerce")
 
-    centroid_cols = [c for c in df.columns if c.lower().startswith("centroid_")]
     centroids_df = df[centroid_cols].copy()
     morpho_df = df.drop(columns=centroid_cols).copy()
 
@@ -265,7 +441,19 @@ def compute_centroid_proximity_distances(centroids_df: pd.DataFrame)->pd.DataFra
     """
     # Extract labels and coordinates
     labels = centroids_df.index.to_numpy()
-    coords = centroids_df[["centroid_z", "centroid_y", "centroid_x"]].to_numpy()
+
+    if {"centroid_z", "centroid_y", "centroid_x"}.issubset(centroids_df.columns):
+        coord_cols = ["centroid_z", "centroid_y", "centroid_x"]
+    elif {"centroid_y", "centroid_x"}.issubset(centroids_df.columns):
+        coord_cols = ["centroid_y", "centroid_x"]
+    else:
+        raise ValueError(
+            "centroids_df must contain either "
+            "['centroid_z', 'centroid_y', 'centroid_x'] or "
+            "['centroid_y', 'centroid_x']"
+        )
+
+    coords = centroids_df[coord_cols].to_numpy()
 
     # Compute full pairwise distance matrix
     distance_matrix = distance.cdist(coords, coords, metric='euclidean')
